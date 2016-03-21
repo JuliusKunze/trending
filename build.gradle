@@ -1,0 +1,33 @@
+group 'trending'
+version '1.0-SNAPSHOT'
+
+buildscript {
+    ext.kotlin_version = '1.0.0'
+    ext.spek_version = '0.1.195'
+
+    repositories {
+        mavenCentral()
+    }
+
+    dependencies {
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+    }
+}
+
+apply plugin: 'kotlin'
+
+repositories {
+    mavenCentral()
+    maven { url "http://repository.jetbrains.com/all" }
+}
+
+dependencies {
+    compile "org.jfree:jfreechart:1.0.19"
+    compile "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
+
+    testCompile "org.jetbrains.spek:spek:$spek_version"
+}
+
+sourceSets {
+    main.java.srcDirs += 'src/main/kotlin'
+}
