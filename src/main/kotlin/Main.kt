@@ -7,6 +7,8 @@ import org.jfree.data.xy.XYSeries
 import org.jfree.data.xy.XYSeriesCollection
 import java.io.File
 import java.io.FileOutputStream
+import java.net.URL
+import java.nio.channels.Channels
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
@@ -21,48 +23,89 @@ operator fun Duration.times(number: Int) = multipliedBy(number.toLong())
 val Duration.days: Double get() = seconds.toDouble() / (60 * 60 * 24)
 val Duration.years: Double get() = days / 365.0
 
-fun Double.toPercentString() = this.toPercent().toInt().toString() + "%"
+fun Double.toPercentString() = ((this.toPercent() * 10).toInt() / 10.0).toString() + "%"
 fun Double.toPercent() = this * 100
 val Instant.year: Int get() = atOffset(ZoneOffset.UTC).year
 
-class DatedValue(val value: Double, val instant: Instant)
+data class DatedValue(val value: Double, val instant: Instant)
 
-fun <T> List<T>.weightedAverageBy(weight: (T) -> Double, value: (T) -> Double) = sumByDouble { weight(it) * value(it) } / sumByDouble { weight(it) }
+val relativeTransactionFee = 0.000
 
+fun <T> List<T>.averageWeightedBy(weight: (T) -> Double, value: (T) -> Double) = sumByDouble { weight(it) * value(it) } / sumByDouble { weight(it) }
+fun List<Double>.product() = fold(1.0) { product, factor -> product * factor }
+fun <T> List<T>.productBy(selector: (T) -> Double) = map(selector).product()
 
-private val days: List<Long> by lazy {
-    val min = 8
-    val max = 500
-    val factor = 1.1
-    (0..(Math.log(max.toDouble() / min) / Math.log(factor)).toInt()).map { (min * Math.pow(factor, it.toDouble())).toLong() }
+private fun URL.downloadTo(file: File) = file.apply {
+    FileOutputStream(this).channel.transferFrom(Channels.newChannel(openStream()), 0, Long.MAX_VALUE)
 }
 
 fun main(args: Array<String>) {
+    analyze(sp500(), "SP500")
+    //   analyze(dax(), "DAX")
+}
+
+fun sp500(): TimedIndex {
+    val tableFile = File("SP500.csv")
+    val today = LocalDate.now()
+    URL("http://real-chart.finance.yahoo.com/table.csv?s=%5EGSPC&a=00&b=1&c=1900&d=${today.month}&e=${today.dayOfMonth}&f=${today.year}&g=d&ignore=.csv").downloadTo(tableFile)
+
+    val cells = tableFile.readLines().drop(1).map { it.split(",") }.filter { it.any { it.isNotEmpty() } }
+    return TimedIndex(cells.withIndex().map { DatedValue(it.value[4].toDouble(), instantFromDateString(it.value[0])) })
+}
+
+fun dax(): TimedIndex {
     val cells = File("dax.csv").readLines().drop(1).map { it.split(";") }.filter { it.any { it.isNotEmpty() } }
-    val dax = TimedIndex(cells.withIndex().map { DatedValue(it.value[4].replace(".", "").replace(",", ".").toDouble(), instantFromDateString(it.value[0])) })
+    return TimedIndex(cells.withIndex().map { DatedValue(it.value[4].replace(".", "").replace(",", ".").toDouble(), instantFromDateString(it.value[0])) })
+}
 
-    val enclosingInterval = dax.Interval(start = instant(1993, 1, 4), end = dax.totalInterval.end)
+private fun analyze(index: TimedIndex, name: String, enclosingInterval: TimedIndex.Interval = index.Interval(start = instant(2010, 1, 4), end = index.totalInterval.end)) {
+    val differences = index.values.withIndex().drop(1).map {
+        val before = index.values[it.index - 1].value
+        val after = it.value.value
+        DatedValue((after - before) / before, it.value.instant)
+    }
+    println("max relative daily losses: ${differences.sortedBy { it.value }.map { "${it.value.toPercentString()} (${it.instant})" }.take(10)}")
 
-    val buyAndHoldStrategy = dax.Strategy(listOf(enclosingInterval), enclosingInterval = enclosingInterval)
+    val min = 8
+    val max = 500
+    val factor = 2.0
+    val days = (0..(Math.log(max.toDouble() / min) / Math.log(factor)).toInt()).map { (min * Math.pow(factor, it.toDouble())).toLong() }
+
+    val buyAndHoldStrategy = index.Strategy(listOf(enclosingInterval), enclosingInterval = enclosingInterval)
     val buyAndHoldStrategiesChartDummy = days.map { buyAndHoldStrategy }
-    val simpleMovingAverageStrategies = days.map { dax.SimpleMovingAverageStrategy(duration = Duration.ofDays(it), enclosingInterval = enclosingInterval) }
-    val exponentialMovingAverageStrategies = days.map { dax.ExponentialMovingAverageStrategy(halfLife = Duration.ofDays(it), enclosingInterval = enclosingInterval) }
+    val simpleMovingAverageStrategies = days.map { index.SimpleMovingAverageStrategy(duration = Duration.ofDays(it), enclosingInterval = enclosingInterval) }
+    val weightedMovingAverageStrategies = days.map { index.WeightedMovingAverageStrategy(duration = Duration.ofDays(it), enclosingInterval = enclosingInterval) }
+    val exponentialMovingAverageStrategies = days.map { index.ExponentialMovingAverageStrategy(halfLife = Duration.ofDays(it), enclosingInterval = enclosingInterval) }
 
+    val testPeriodDescription = " ($name ${enclosingInterval.start.year} - ${enclosingInterval.end.year}).png"
+
+    fun TimedIndex.valuesInEnclosingInterval() = values.filter { it.instant in enclosingInterval }
 
     saveChartPng(
-            (listOf("DAX" to dax) + simpleMovingAverageStrategies.withIndex().map { "SMA ${days[it.index]}" to it.value.reference }).toMap(),
-            File("simple moving averages of dax.png"))
+            (listOf(name to index.valuesInEnclosingInterval()) + simpleMovingAverageStrategies.withIndex().map { "SMA ${days[it.index]}" to it.value.reference.valuesInEnclosingInterval() }).toMap(),
+            File("simple moving averages ($name).png"))
 
     saveChartPng(
-            (listOf("DAX" to dax) + exponentialMovingAverageStrategies.withIndex().map { "EMA ${days[it.index]} (half life)" to it.value.reference }).toMap(),
-            File("exponential moving averages of dax.png"))
+            (listOf(name to index.valuesInEnclosingInterval()) + weightedMovingAverageStrategies.withIndex().map { "WMA ${days[it.index]}" to it.value.reference.valuesInEnclosingInterval() }).toMap(),
+            File("weighted moving averages ($name).png"))
+
+    saveChartPng(
+            (listOf(name to index.valuesInEnclosingInterval()) + exponentialMovingAverageStrategies.withIndex().map { "EMA ${days[it.index]} (half life)" to it.value.reference.valuesInEnclosingInterval() }).toMap(),
+            File("exponential moving averages ($name).png"))
+
+    fun TimedIndex.Strategy.gainByTime() = index.valuesInEnclosingInterval().map { DatedValue(Math.log(gainFactorBy(it.instant)) / Math.log(2.0), it.instant) }
+
+    saveChartPng(
+            (simpleMovingAverageStrategies.withIndex().map { "WMA ${days[it.index]}" to it.value.gainByTime() } +
+                    listOf("buy and hold strategy (as comparison)" to buyAndHoldStrategy.gainByTime())).toMap(),
+            File("SMA gains factor (logarithmic: +1 means x2) by time (assuming ${relativeTransactionFee.toPercentString()} fee per transaction)" + testPeriodDescription))
 
     fun List<TimedIndex.Strategy>.averageYearlyRelativeGainsByDays() = withIndex().map { XYDataItem(days[it.index], it.value.averageRelativeGainPerYear.toPercent()) }
     fun List<TimedIndex.Strategy>.averageTransactionIntervalInDaysByDays() = withIndex().map { XYDataItem(days[it.index], it.value.averageTransactionInterval.days) }
 
-    val testPeriodDescription = " (test period ${enclosingInterval.start.year} - ${enclosingInterval.end.year}).png"
     saveChartPng(mapOf(
             "simple moving average strategy" to simpleMovingAverageStrategies.averageYearlyRelativeGainsByDays(),
+            "weighted moving average strategy" to weightedMovingAverageStrategies.averageYearlyRelativeGainsByDays(),
             "exponential moving average strategy" to exponentialMovingAverageStrategies.averageYearlyRelativeGainsByDays(),
             "buy and hold strategy (as comparison)" to buyAndHoldStrategiesChartDummy.averageYearlyRelativeGainsByDays()),
             File("relative gain per year" + testPeriodDescription),
@@ -71,6 +114,7 @@ fun main(args: Array<String>) {
 
     saveChartPng(mapOf(
             "simple moving average strategy" to simpleMovingAverageStrategies.averageTransactionIntervalInDaysByDays(),
+            "weighted moving average strategy" to weightedMovingAverageStrategies.averageTransactionIntervalInDaysByDays(),
             "exponential moving average strategy" to exponentialMovingAverageStrategies.averageTransactionIntervalInDaysByDays()),
             File("average transaction interval" + testPeriodDescription),
             xAxisLabel = "moving average duration or half life in days",
@@ -91,11 +135,11 @@ fun saveChartPng(values: Map<String, List<XYDataItem>>, file: File, title: Strin
         PlotOrientation.VERTICAL,
         true, true, false).saveToPng(file)
 
-fun saveChartPng(values: Map<String, TimedIndex>, file: File, title: String = file.nameWithoutExtension, valueAxisLabel: String = "Value") = ChartFactory.createTimeSeriesChart(
+fun saveChartPng(values: Map<String, List<DatedValue>>, file: File, title: String = file.nameWithoutExtension, valueAxisLabel: String = "Value") = ChartFactory.createTimeSeriesChart(
         title,
         "Time",
         valueAxisLabel,
-        chartDataSet(values.mapValues { it.value.values.map { XYDataItem(it.instant.toEpochMilli(), it.value) } }),
+        chartDataSet(values.mapValues { it.value.map { XYDataItem(it.instant.toEpochMilli(), it.value) } }),
         true, true, false).saveToPng(file)
 
 class TimedIndex(unsortedValues: List<DatedValue>) {
@@ -113,14 +157,20 @@ class TimedIndex(unsortedValues: List<DatedValue>) {
 
     inner open class IntervalsAboveStrategy(val reference: TimedIndex, enclosingInterval: Interval = totalInterval) : Strategy(aboveIntervals(enclosingInterval, reference), enclosingInterval = enclosingInterval)
 
-    fun valuesBefore(instant: Instant) = values.filter { it.instant < instant }
+    fun valuesBefore(instant: Instant) = values.filter { it.instant <= instant }
+    fun valuesInInterval(instant: Instant, duration: Duration) = valuesBefore(instant).filter { instant - duration <= it.instant }
 
-    fun simpleMovingAverageBefore(instant: Instant, duration: Duration) = valuesBefore(instant).filter { instant - duration < it.instant }.map { it.value }.average()
+    fun simpleMovingAverageBefore(instant: Instant, duration: Duration) = valuesInInterval(instant, duration).map { it.value }.average()
     fun simpleMovingAverage(duration: Duration) = TimedIndex(values.map { DatedValue(simpleMovingAverageBefore(it.instant, duration = duration), it.instant) })
     // https://en.wikipedia.org/wiki/Moving_average
     inner class SimpleMovingAverageStrategy(val duration: Duration, enclosingInterval: Interval) : IntervalsAboveStrategy(simpleMovingAverage(duration), enclosingInterval = enclosingInterval)
 
-    fun exponentialMovingAverageBefore(instant: Instant, halfLife: Duration): Double {
+    fun weightedMovingAverageBefore(instant: Instant, duration: Duration) = valuesInInterval(instant, duration).averageWeightedBy({ (duration - (instant - it.instant)).days }) { it.value }
+    fun weightedMovingAverage(duration: Duration) = TimedIndex(values.map { DatedValue(weightedMovingAverageBefore(it.instant, duration = duration), it.instant) })
+    inner class WeightedMovingAverageStrategy(val duration: Duration, enclosingInterval: Interval) : IntervalsAboveStrategy(weightedMovingAverage(duration), enclosingInterval = enclosingInterval)
+
+
+    fun exponentialMovingAverageBefore(instant: Instant, halfLife: Duration, n: Duration = halfLife * 4): Double {
         if (halfLife.isNegative) {
             throw IllegalArgumentException("Half life must be non-negative.")
         }
@@ -129,7 +179,7 @@ class TimedIndex(unsortedValues: List<DatedValue>) {
 
         assert(alpha < 1)
 
-        return valuesBefore(instant).weightedAverageBy({ Math.pow(alpha, (instant - it.instant).days) }) { it.value }
+        return valuesInInterval(instant, duration = n).averageWeightedBy({ Math.pow(alpha, (instant - it.instant).days) }) { it.value }
     }
 
     fun exponentialMovingAverage(halfLife: Duration) = TimedIndex(values.map { DatedValue(exponentialMovingAverageBefore(it.instant, halfLife = halfLife), it.instant) })
@@ -143,10 +193,16 @@ class TimedIndex(unsortedValues: List<DatedValue>) {
         val endValue = value(end)
         val gain = endValue - startValue
         val relativeGain = gain / startValue
-        val gainFactor = 1 + relativeGain
-        val gainFactorPerYear = Math.pow(gainFactor, 1 / duration.years)
+        val totalGainFactor = 1 + relativeGain
+        val gainFactorPerYear = Math.pow(totalGainFactor, 1 / duration.years)
+
+        val transactionFeeFactor = 1 - relativeTransactionFee
+
+        fun gainFactorBy(instant: Instant) = if (instant <= start) 1.0 else transactionFeeFactor * (if (end <= instant) transactionFeeFactor * totalGainFactor else Interval(start, instant).totalGainFactor)
 
         override fun toString() = "${duration.days.toString()} days from $start, ${gainFactorPerYear.toPercentString()}% gain per year"
+
+        operator fun contains(it: Instant) = start <= it && it <= end
     }
 
     inner open class Strategy(val buyIntervals: List<Interval>, val enclosingInterval: Interval) {
@@ -157,14 +213,15 @@ class TimedIndex(unsortedValues: List<DatedValue>) {
             }
         }
 
-        val gainFactor = buyIntervals.fold(1.0) { gain, new -> gain * new.gainFactor }
+        fun gainFactorBy(instant: Instant) = buyIntervals.productBy { it.gainFactorBy(instant) }
+        val totalGainFactor = gainFactorBy(enclosingInterval.end)
 
         val transactionCount = 2 * buyIntervals.size
         val averageTransactionInterval = enclosingInterval.duration / transactionCount
 
-        val averageGainFactorPerYear = Math.pow(gainFactor, 1 / enclosingInterval.duration.years)
+        val averageGainFactorPerYear = Math.pow(totalGainFactor, 1 / enclosingInterval.duration.years)
         val averageRelativeGainPerYear = averageGainFactorPerYear - 1
 
-        override fun toString() = "Total gain: ${gainFactor.toPercentString()}, avg. per year: ${averageGainFactorPerYear.toPercentString()}"
+        override fun toString() = "Total gain: ${totalGainFactor.toPercentString()}, avg. per year: ${averageGainFactorPerYear.toPercentString()}"
     }
 }
