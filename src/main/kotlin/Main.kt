@@ -40,12 +40,25 @@ private fun URL.downloadTo(file: File) = file.apply {
 }
 
 fun main(args: Array<String>) {
-    analyze(sp500(), "SP500")
+    val sp500TotalReturn = sp500TotalReturn()
+    val sp500PriceReturn = sp500PriceReturn()
+    saveChartPng(
+            mapOf("total return" to sp500TotalReturn.values, "price return" to sp500PriceReturn.values),
+            File("total return vs price return.png"))
+
+    analyze(sp500TotalReturn, "SP500TR")
     //   analyze(dax(), "DAX")
 }
 
-fun sp500(): TimedIndex {
-    val tableFile = File("SP500.csv")
+fun sp500TotalReturn(): TimedIndex {
+    // data from https://www.google.de/url?sa=t&rct=j&q=&esrc=s&source=web&cd=2&cad=rja&uact=8&ved=0ahUKEwj0k7PF8NbLAhVkj3IKHaxvC_8QFggkMAE&url=http%3A%2F%2Fwww.cboe.com%2Fmicro%2Fbuywrite%2Fdailypricehistory.xls&usg=AFQjCNEO59UEWFT2cM8YYNLcH0NXGtTrng&sig2=XNKdDd4l9Ff24xxo6gEkuA
+    val tableFile = File("SP500TR.csv")
+    val cells = tableFile.readLines().drop(1).map { it.split(";") }.filter { it.any { it.isNotEmpty() } }
+    return TimedIndex(cells.withIndex().map { DatedValue(it.value[1].toDouble(), instantFromDateString(it.value[0])) })
+}
+
+fun sp500PriceReturn(): TimedIndex {
+    val tableFile = File("SP500PR.csv")
     val today = LocalDate.now()
     URL("http://real-chart.finance.yahoo.com/table.csv?s=%5EGSPC&a=00&b=1&c=1900&d=${today.month}&e=${today.dayOfMonth}&f=${today.year}&g=d&ignore=.csv").downloadTo(tableFile)
 
