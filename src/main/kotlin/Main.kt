@@ -29,7 +29,7 @@ val Instant.year: Int get() = atOffset(ZoneOffset.UTC).year
 
 data class DatedValue(val value: Double, val instant: Instant)
 
-val relativeTransactionFee = 0.000
+val relativeTransactionFee = 0.005
 
 fun <T> List<T>.averageWeightedBy(weight: (T) -> Double, value: (T) -> Double) = sumByDouble { weight(it) * value(it) } / sumByDouble { weight(it) }
 fun List<Double>.product() = fold(1.0) { product, factor -> product * factor }
@@ -46,8 +46,8 @@ fun main(args: Array<String>) {
             mapOf("total return" to sp500TotalReturn.values, "price return" to sp500PriceReturn.values),
             File("total return vs price return.png"))
 
-    analyze(sp500TotalReturn, "SP500TR")
-    //   analyze(dax(), "DAX")
+    //analyze(sp500TotalReturn, "SP500TR")
+    analyze(dax(), "DAX")
 }
 
 fun sp500TotalReturn(): TimedIndex {
@@ -71,7 +71,7 @@ fun dax(): TimedIndex {
     return TimedIndex(cells.withIndex().map { DatedValue(it.value[4].replace(".", "").replace(",", ".").toDouble(), instantFromDateString(it.value[0])) })
 }
 
-private fun analyze(index: TimedIndex, name: String, enclosingInterval: TimedIndex.Interval = index.Interval(start = instant(2010, 1, 4), end = index.totalInterval.end)) {
+private fun analyze(index: TimedIndex, name: String, enclosingInterval: TimedIndex.Interval = index.Interval(start = instant(2000, 1, 4), end = index.totalInterval.end)) {
     val differences = index.values.withIndex().drop(1).map {
         val before = index.values[it.index - 1].value
         val after = it.value.value
@@ -79,9 +79,9 @@ private fun analyze(index: TimedIndex, name: String, enclosingInterval: TimedInd
     }
     println("max relative daily losses: ${differences.sortedBy { it.value }.map { "${it.value.toPercentString()} (${it.instant})" }.take(10)}")
 
-    val min = 8
+    val min = 2
     val max = 500
-    val factor = 2.0
+    val factor = 1.2
     val days = (0..(Math.log(max.toDouble() / min) / Math.log(factor)).toInt()).map { (min * Math.pow(factor, it.toDouble())).toLong() }
 
     val buyAndHoldStrategy = index.Strategy(listOf(enclosingInterval), enclosingInterval = enclosingInterval)
@@ -90,7 +90,7 @@ private fun analyze(index: TimedIndex, name: String, enclosingInterval: TimedInd
     val weightedMovingAverageStrategies = days.map { index.WeightedMovingAverageStrategy(duration = Duration.ofDays(it), enclosingInterval = enclosingInterval) }
     val exponentialMovingAverageStrategies = days.map { index.ExponentialMovingAverageStrategy(halfLife = Duration.ofDays(it), enclosingInterval = enclosingInterval) }
 
-    val testPeriodDescription = " ($name ${enclosingInterval.start.year} - ${enclosingInterval.end.year}).png"
+    val testPeriodDescription = "(assuming ${relativeTransactionFee.toPercentString()} fee per transaction) ($name ${enclosingInterval.start.year} - ${enclosingInterval.end.year}).png"
 
     fun TimedIndex.valuesInEnclosingInterval() = values.filter { it.instant in enclosingInterval }
 
@@ -111,10 +111,20 @@ private fun analyze(index: TimedIndex, name: String, enclosingInterval: TimedInd
     saveChartPng(
             (simpleMovingAverageStrategies.withIndex().map { "WMA ${days[it.index]}" to it.value.gainByTime() } +
                     listOf("buy and hold strategy (as comparison)" to buyAndHoldStrategy.gainByTime())).toMap(),
-            File("SMA gains factor (logarithmic: +1 means x2) by time (assuming ${relativeTransactionFee.toPercentString()} fee per transaction)" + testPeriodDescription))
+            File("SMA gains factor (logarithmic: +1 means x2) by time" + testPeriodDescription))
 
     fun List<TimedIndex.Strategy>.averageYearlyRelativeGainsByDays() = withIndex().map { XYDataItem(days[it.index], it.value.averageRelativeGainPerYear.toPercent()) }
     fun List<TimedIndex.Strategy>.averageTransactionIntervalInDaysByDays() = withIndex().map { XYDataItem(days[it.index], it.value.averageTransactionInterval.days) }
+
+    fun List<TimedIndex.Strategy>.averageYearlyRelativeGainsByTransactionInterval() = map { XYDataItem(it.averageTransactionInterval.days, it.averageRelativeGainPerYear.toPercent()) }
+
+    saveChartPng(mapOf(
+            "simple moving average strategy" to simpleMovingAverageStrategies.averageYearlyRelativeGainsByTransactionInterval(),
+            "weighted moving average strategy" to weightedMovingAverageStrategies.averageYearlyRelativeGainsByTransactionInterval(),
+            "exponential moving average strategy" to exponentialMovingAverageStrategies.averageYearlyRelativeGainsByTransactionInterval()),
+            File("averageYearlyRelativeGainsByTransactionInterval" + testPeriodDescription),
+            xAxisLabel = "averageTransactionInterval",
+            yAxisLabel = "relative gain per year in %")
 
     saveChartPng(mapOf(
             "simple moving average strategy" to simpleMovingAverageStrategies.averageYearlyRelativeGainsByDays(),
