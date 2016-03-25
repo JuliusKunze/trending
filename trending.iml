@@ -25,5 +25,6 @@
     <orderEntry type="library" scope="TEST" name="Gradle: org.jetbrains.kotlin:kotlin-reflect:1.0.0" level="project" />
     <orderEntry type="library" name="Gradle: org.jfree:jfreechart:1.0.19" level="project" />
     <orderEntry type="library" name="Gradle: org.jfree:jcommon:1.0.23" level="project" />
+    <orderEntry type="library" name="Gradle: org.jsoup:jsoup:1.7.2" level="project" />
   </component>
 </module>

@@ -1,10 +1,14 @@
 import org.jfree.chart.ChartFactory
 import org.jfree.chart.ChartUtilities
 import org.jfree.chart.JFreeChart
+import org.jfree.chart.labels.XYItemLabelGenerator
 import org.jfree.chart.plot.PlotOrientation
+import org.jfree.chart.plot.XYPlot
+import org.jfree.chart.renderer.xy.XYLineAndShapeRenderer
 import org.jfree.data.xy.XYDataItem
 import org.jfree.data.xy.XYSeries
 import org.jfree.data.xy.XYSeriesCollection
+import org.jsoup.Jsoup
 import java.io.File
 import java.io.FileOutputStream
 import java.net.URL
@@ -29,7 +33,7 @@ val Instant.year: Int get() = atOffset(ZoneOffset.UTC).year
 
 data class DatedValue(val value: Double, val instant: Instant)
 
-val relativeTransactionFee = 0.005
+val relativeTransactionFee = 0.0005
 
 fun <T> List<T>.averageWeightedBy(weight: (T) -> Double, value: (T) -> Double) = sumByDouble { weight(it) * value(it) } / sumByDouble { weight(it) }
 fun List<Double>.product() = fold(1.0) { product, factor -> product * factor }
@@ -40,6 +44,7 @@ private fun URL.downloadTo(file: File) = file.apply {
 }
 
 fun main(args: Array<String>) {
+    val shortDax = shortDax()
     val sp500TotalReturn = sp500TotalReturn()
     val sp500PriceReturn = sp500PriceReturn()
     saveChartPng(
@@ -71,7 +76,16 @@ fun dax(): TimedIndex {
     return TimedIndex(cells.withIndex().map { DatedValue(it.value[4].replace(".", "").replace(",", ".").toDouble(), instantFromDateString(it.value[0])) })
 }
 
-private fun analyze(index: TimedIndex, name: String, enclosingInterval: TimedIndex.Interval = index.Interval(start = instant(2000, 1, 4), end = index.totalInterval.end)) {
+fun shortDax(): TimedIndex {
+    val doc = Jsoup.parse(File("shortDax.html"), "UTF-8", "http://de.investing.com/indices/short-dax-historical-data");
+
+    val dates = doc.select("#curr_table .bold.noWrap").map { instantFromDateString(it.ownText()) }
+    val values = doc.select("#curr_table .noWrap+ td").map { it.ownText().toDouble() }
+
+    return TimedIndex(dates.zip(values) { date, value -> DatedValue(value = value, instant = date) })
+}
+
+private fun analyze(index: TimedIndex, name: String, enclosingInterval: TimedIndex.Interval = index.Interval(start = instant(2010, 1, 4), end = instant(2014, 1, 10))) {
     val differences = index.values.withIndex().drop(1).map {
         val before = index.values[it.index - 1].value
         val after = it.value.value
@@ -79,7 +93,7 @@ private fun analyze(index: TimedIndex, name: String, enclosingInterval: TimedInd
     }
     println("max relative daily losses: ${differences.sortedBy { it.value }.map { "${it.value.toPercentString()} (${it.instant})" }.take(10)}")
 
-    val min = 2
+    val min = 8
     val max = 500
     val factor = 1.2
     val days = (0..(Math.log(max.toDouble() / min) / Math.log(factor)).toInt()).map { (min * Math.pow(factor, it.toDouble())).toLong() }
@@ -124,7 +138,11 @@ private fun analyze(index: TimedIndex, name: String, enclosingInterval: TimedInd
             "exponential moving average strategy" to exponentialMovingAverageStrategies.averageYearlyRelativeGainsByTransactionInterval()),
             File("averageYearlyRelativeGainsByTransactionInterval" + testPeriodDescription),
             xAxisLabel = "averageTransactionInterval",
-            yAxisLabel = "relative gain per year in %")
+            yAxisLabel = "relative gain per year in %") {
+        val renderer = (plot as XYPlot).renderer as XYLineAndShapeRenderer
+        renderer.baseItemLabelGenerator = XYItemLabelGenerator { xyDataset, seriesIndex, itemIndex -> days[itemIndex].toString() }
+        renderer.baseItemLabelsVisible = true
+    }
 
     saveChartPng(mapOf(
             "simple moving average strategy" to simpleMovingAverageStrategies.averageYearlyRelativeGainsByDays(),
@@ -150,13 +168,13 @@ fun chartDataSet(values: Map<String, List<XYDataItem>>) = XYSeriesCollection().a
 
 fun JFreeChart.saveToPng(file: File) = ChartUtilities.writeChartAsPNG(FileOutputStream(file), this, 1920, 1080)
 
-fun saveChartPng(values: Map<String, List<XYDataItem>>, file: File, title: String = file.nameWithoutExtension, xAxisLabel: String, yAxisLabel: String) = ChartFactory.createXYLineChart(
+fun saveChartPng(values: Map<String, List<XYDataItem>>, file: File, title: String = file.nameWithoutExtension, xAxisLabel: String, yAxisLabel: String, applyToChart: JFreeChart.() -> Unit = {}) = ChartFactory.createXYLineChart(
         title,
         xAxisLabel,
         yAxisLabel,
         chartDataSet(values),
         PlotOrientation.VERTICAL,
-        true, true, false).saveToPng(file)
+        true, true, false).apply { applyToChart() }.saveToPng(file)
 
 fun saveChartPng(values: Map<String, List<DatedValue>>, file: File, title: String = file.nameWithoutExtension, valueAxisLabel: String = "Value") = ChartFactory.createTimeSeriesChart(
         title,

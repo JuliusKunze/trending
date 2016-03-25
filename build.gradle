@@ -23,6 +23,7 @@ repositories {
 
 dependencies {
     compile "org.jfree:jfreechart:1.0.19"
+    compile 'org.jsoup:jsoup:1.7.2'
     compile "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
 
     testCompile "org.jetbrains.spek:spek:$spek_version"
