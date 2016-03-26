@@ -219,14 +219,22 @@ class TimedIndex(unsortedValues: List<DatedValue>) {
     val Interval.transactionFeeFactor: Double get() = 1 - relativeTransactionFee
     fun Interval.gainFactorBy(instant: Instant) = if (instant <= start) 1.0 else transactionFeeFactor * (if (end <= instant) transactionFeeFactor * totalGainFactor else Interval(start, instant).totalGainFactor)
 
-    private fun aboveIntervals(enclosingInterval: Interval, other: TimedIndex): List<Interval> {
-        val aboveIndexes = values.indices.filter { values[it].value > other.values[it].value }
-        val beginning = aboveIndexes.filter { it - 1 !in aboveIndexes }
-        val ending = aboveIndexes.filter { it + 1 !in aboveIndexes }
-        return beginning.zip(ending) { b, e -> Interval(values[b].instant, values[e].instant) }.filter { it.start >= enclosingInterval.start && it.end <= enclosingInterval.end }
+    private fun aboveBuyIntervals(enclosingInterval: Interval, other: TimedIndex): List<Interval> {
+        val above = values.indices.filter { values[it].value > other.values[it].value }
+        val notAbove = (values.indices.toSet() - above).toList().sorted()
+        val buyIndexes = above.filter { it - 1 in notAbove }
+        val sellIndexes = notAbove.filter { it - 1 in above }
+
+        val startsWithSell = sellIndexes.any() && (!buyIndexes.any() || sellIndexes.first() < buyIndexes.first() )
+        val correctedBuyIndexes = (if (startsWithSell) listOf(values.indices.first) else emptyList()) + buyIndexes
+
+        val endsWithBuy = buyIndexes.any() && (!sellIndexes.any() || buyIndexes.last() < sellIndexes.last())
+        val correctedSellIndexes = sellIndexes + if (endsWithBuy) listOf(values.indices.last) else emptyList()
+
+        return correctedBuyIndexes.zip(correctedSellIndexes) { buy, sell -> Interval(values[buy].instant, values[sell].instant) }.filter { it in enclosingInterval }
     }
 
-    inner open class IntervalsAboveStrategy(val reference: TimedIndex, enclosingInterval: Interval = totalInterval) : Strategy(aboveIntervals(enclosingInterval, reference), enclosingInterval = enclosingInterval)
+    inner open class IntervalsAboveStrategy(val reference: TimedIndex, enclosingInterval: Interval = totalInterval) : Strategy(aboveBuyIntervals(enclosingInterval, reference), enclosingInterval = enclosingInterval)
 
     fun valuesBefore(instant: Instant) = values.filter { it.instant <= instant }
     fun valuesInInterval(instant: Instant, duration: Duration) = valuesBefore(instant).filter { instant - duration <= it.instant }
