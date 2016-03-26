@@ -58,7 +58,11 @@ fun daxVsShortDax() = saveChartPng(
 
 fun main(args: Array<String>) {
     daxVsShortDax()
-    analyze(dax, "AX")
+    val wma28Dax = dax.WeightedMovingAverageStrategy(duration = Duration.ofDays(28), enclosingInterval = shortDax.totalInterval)
+    val wma28DaxStrategyReversedOnShortDax = wma28Dax.reversedOn(shortDax)
+    val wma28ShortDax = shortDax.WeightedMovingAverageStrategy(duration = Duration.ofDays(28), enclosingInterval = shortDax.totalInterval)
+
+    analyze(dax, "DAX")
 }
 
 val sp500TotalReturn by lazy {
@@ -91,7 +95,7 @@ val shortDax by lazy {
     TimedIndex(dates.zip(values) { date, value -> DatedValue(value = value, instant = date) })
 }
 
-private fun analyze(index: TimedIndex, name: String, enclosingInterval: TimedIndex.Interval = index.Interval(instant(2012, 1, 4), index.totalInterval.end)) {
+private fun analyze(index: TimedIndex, name: String, enclosingInterval: Interval = Interval(instant(2012, 1, 4), index.totalInterval.end)) {
     val differences = index.values.withIndex().drop(1).map {
         val before = index.values[it.index - 1].value
         val after = it.value.value
@@ -101,7 +105,7 @@ private fun analyze(index: TimedIndex, name: String, enclosingInterval: TimedInd
 
     val min = 8
     val max = 500
-    val factor = 1.05
+    val factor = 1.2
     val days = (0..(Math.log(max.toDouble() / min) / Math.log(factor)).toInt()).map { (min * Math.pow(factor, it.toDouble())).toLong() }
 
     val buyAndHoldStrategy = index.Strategy(listOf(enclosingInterval), enclosingInterval = enclosingInterval)
@@ -191,11 +195,29 @@ fun saveChartPng(values: Map<String, List<DatedValue>>, file: File, title: Strin
         chartDataSet(values.mapValues { it.value.map { XYDataItem(it.instant.toEpochMilli(), it.value) } }),
         true, true, false).saveToPng(file)
 
+class Interval(val start: Instant, val end: Instant) {
+    val duration = end - start
+
+    operator fun contains(it: Instant) = start <= it && it <= end
+    operator fun contains(it: Interval) = start <= it.start && it.end <= end
+    override fun toString() = "$start to $end, duration $duration"
+}
+
 class TimedIndex(unsortedValues: List<DatedValue>) {
     val values = unsortedValues.sortedBy { it.instant.epochSecond }
+    val valuesByDate = values.associateBy { it.instant }
+    fun value(instant: Instant) = valuesByDate[instant]!!.value
 
     val totalInterval = Interval(start = values.first().instant, end = values.last().instant)
 
+    val Interval.startValue: Double get() = value(start)
+    val Interval.endValue: Double get() = value(end)
+    val Interval.gain: Double get() = endValue - startValue
+    val Interval.relativeGain: Double get() = gain / startValue
+    val Interval.totalGainFactor: Double get() = 1 + relativeGain
+    val Interval.gainFactorPerYear: Double get() = Math.pow(totalGainFactor, 1 / duration.years)
+    val Interval.transactionFeeFactor: Double get() = 1 - relativeTransactionFee
+    fun Interval.gainFactorBy(instant: Instant) = if (instant <= start) 1.0 else transactionFeeFactor * (if (end <= instant) transactionFeeFactor * totalGainFactor else Interval(start, instant).totalGainFactor)
 
     private fun aboveIntervals(enclosingInterval: Interval, other: TimedIndex): List<Interval> {
         val aboveIndexes = values.indices.filter { values[it].value > other.values[it].value }
@@ -234,29 +256,9 @@ class TimedIndex(unsortedValues: List<DatedValue>) {
     fun exponentialMovingAverage(halfLife: Duration) = TimedIndex(values.map { DatedValue(exponentialMovingAverageBefore(it.instant, halfLife = halfLife), it.instant) })
     inner class ExponentialMovingAverageStrategy(val halfLife: Duration, enclosingInterval: Interval) : IntervalsAboveStrategy(exponentialMovingAverage(halfLife), enclosingInterval = enclosingInterval)
 
-    fun value(instant: Instant) = values.single { it.instant == instant }.value
-
-    inner class Interval(val start: Instant, val end: Instant) {
-        val duration = end - start
-        val startValue = value(start)
-        val endValue = value(end)
-        val gain = endValue - startValue
-        val relativeGain = gain / startValue
-        val totalGainFactor = 1 + relativeGain
-        val gainFactorPerYear = Math.pow(totalGainFactor, 1 / duration.years)
-
-        val transactionFeeFactor = 1 - relativeTransactionFee
-
-        fun gainFactorBy(instant: Instant) = if (instant <= start) 1.0 else transactionFeeFactor * (if (end <= instant) transactionFeeFactor * totalGainFactor else Interval(start, instant).totalGainFactor)
-
-        override fun toString() = "${duration.days.toString()} days from $start, ${gainFactorPerYear.toPercentString()}% gain per year"
-
-        operator fun contains(it: Instant) = start <= it && it <= end
-    }
-
     inner open class Strategy(val buyIntervals: List<Interval>, val enclosingInterval: Interval) {
         init {
-            val outliers = buyIntervals.filter { it.start < enclosingInterval.start || it.end > enclosingInterval.end }
+            val outliers = buyIntervals.filter { it !in enclosingInterval }
             if (outliers.any()) {
                 throw IllegalArgumentException("Buy intervals must be inside enclosing interval: $outliers")
             }
@@ -272,5 +274,9 @@ class TimedIndex(unsortedValues: List<DatedValue>) {
         val averageRelativeGainPerYear = averageGainFactorPerYear - 1
 
         override fun toString() = "Total gain: ${totalGainFactor.toPercentString()}, avg. per year: ${averageGainFactorPerYear.toPercentString()}"
+
+        fun onlyDuring(interval: Interval) = Strategy(buyIntervals.filter { it in interval }, interval)
+
+        fun reversedOn(index: TimedIndex) = index.Strategy(buyIntervals.withIndex().drop(1).map { Interval(start = buyIntervals[it.index - 1].end, end = it.value.start) }, enclosingInterval).onlyDuring(index.totalInterval)
     }
 }
