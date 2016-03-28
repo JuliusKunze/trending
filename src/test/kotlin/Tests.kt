@@ -44,7 +44,8 @@ class Tests : Spek() { init {
         on("getting the dax value on a specific date") {
             val d = dax.value(instant(2013, 1, 7))
 
-            it("should equal the value calculated on the on vista web page http://www.onvista.de/index/chart/DAX-Index-20735?notation=20735&activeType=line&activeTab=M1&displayVolume=true&scaling=linear&indicatorselect=%7B%22indicator%22%3A%5B%5B%22WeightedMovingAverage%22%2C%7B%22period%22%3A28%7D%5D%5D%7D") {
+            it("should equal the value found on the on-vista web page") {
+                // http://www.onvista.de/index/chart/DAX-Index-20735?notation=20735&activeType=line&activeTab=J5&displayVolume=true&scaling=linear&indicatorselect=%7B%22indicator%22%3A%5B%5B%22WeightedMovingAverage%22%2C%7B%22period%22%3A2%7D%5D%5D%7D
                 assertEquals(7732.660, d)
             }
         }
@@ -52,7 +53,8 @@ class Tests : Spek() { init {
         on("getting the wma2 value at a specific date") {
             val v = wma2.value(instant(2013, 1, 7))
 
-            it("should equal the value found on the on-vista web page http://www.onvista.de/index/chart/DAX-Index-20735?notation=20735&activeType=line&activeTab=M1&displayVolume=true&scaling=linear&indicatorselect=%7B%22indicator%22%3A%5B%5B%22WeightedMovingAverage%22%2C%7B%22period%22%3A28%7D%5D%5D%7D") {
+            it("should equal the value found on the on-vista web page") {
+                // http://www.onvista.de/index/chart/DAX-Index-20735?notation=20735&activeType=line&activeTab=J5&displayVolume=true&scaling=linear&indicatorselect=%7B%22indicator%22%3A%5B%5B%22WeightedMovingAverage%22%2C%7B%22period%22%3A2%7D%5D%5D%7D
                 assertEquals(7747.230, v)
             }
         }
